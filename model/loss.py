@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch import nn
 import pickle
 
+
 class NormSoftmaxLoss(nn.Module):
     def __init__(self, temperature=0.05):
         super().__init__()
@@ -19,8 +20,8 @@ class NormSoftmaxLoss(nn.Module):
 
     def forward(self, x):
         "Assumes input x is similarity matrix of N x M \in [-1, 1], computed using the cosine similarity between normalised vectors"
-        i_logsm = F.log_softmax(x/self.temperature, dim=1)
-        j_logsm = F.log_softmax(x.t()/self.temperature, dim=1)
+        i_logsm = F.log_softmax(x / self.temperature, dim=1)
+        j_logsm = F.log_softmax(x.t() / self.temperature, dim=1)
 
         # sum over positives
         idiag = torch.diag(i_logsm)
@@ -29,7 +30,8 @@ class NormSoftmaxLoss(nn.Module):
         jdiag = torch.diag(j_logsm)
         loss_j = jdiag.sum() / len(jdiag)
 
-        return - loss_i - loss_j
+        return -loss_i - loss_j
+
 
 class EgoNCE(nn.Module):
     def __init__(self, temperature=0.05, noun=True, verb=True):
@@ -48,16 +50,17 @@ class EgoNCE(nn.Module):
             mask = mask_v + mask_diag
 
         "Assumes input x is similarity matrix of N x M \in [-1, 1], computed using the cosine similarity between normalised vectors"
-        i_sm = F.softmax(x/self.temperature, dim=1)
-        j_sm = F.softmax(x.t()/self.temperature, dim=1)
+        i_sm = F.softmax(x / self.temperature, dim=1)
+        j_sm = F.softmax(x.t() / self.temperature, dim=1)
 
         mask_bool = mask > 0
-        idiag = torch.log(torch.sum(i_sm * mask_bool, dim=1) )
+        idiag = torch.log(torch.sum(i_sm * mask_bool, dim=1))
         loss_i = idiag.sum() / len(idiag)
 
-        jdiag = torch.log(torch.sum(j_sm * mask_bool, dim=1) )
+        jdiag = torch.log(torch.sum(j_sm * mask_bool, dim=1))
         loss_j = jdiag.sum() / len(jdiag)
-        return - loss_i - loss_j
+        return -loss_i - loss_j
+
 
 class EgoMILNCE(nn.Module):
     def __init__(self, temperature=0.05):
@@ -67,24 +70,27 @@ class EgoMILNCE(nn.Module):
     def forward(self, x, num_samples):
         mask_diag = torch.eye(num_samples)
         if x.shape[0] % num_samples != 0 or x.shape[1] % num_samples != 0:
-            print('ERROR: Incorrect num_samples. shapes must be divisible by num_samples...')
+            print(
+                "ERROR: Incorrect num_samples. shapes must be divisible by num_samples..."
+            )
             raise ValueError
-        patch = torch.ones(int(x.shape[0]/num_samples), int(x.shape[1]/num_samples))
+        patch = torch.ones(int(x.shape[0] / num_samples), int(x.shape[1] / num_samples))
         mask = torch.kron(mask_diag, patch).cuda()
 
         # TODO: Do we need mask_v and mask_n for hierarchical contrastive learning as well?
 
         "Assumes input x is similarity matrix of N x M \in [-1, 1], computed using the cosine similarity between normalised vectors"
-        i_sm = F.softmax(x/self.temperature, dim=1)
-        j_sm = F.softmax(x.t()/self.temperature, dim=1)
+        i_sm = F.softmax(x / self.temperature, dim=1)
+        j_sm = F.softmax(x.t() / self.temperature, dim=1)
 
         mask_bool = mask > 0
-        idiag = torch.log(torch.sum(i_sm * mask_bool, dim=1) )
+        idiag = torch.log(torch.sum(i_sm * mask_bool, dim=1))
         loss_i = idiag.sum() / len(idiag)
 
-        jdiag = torch.log(torch.sum(j_sm * mask_bool.T, dim=1) )
+        jdiag = torch.log(torch.sum(j_sm * mask_bool.T, dim=1))
         loss_j = jdiag.sum() / len(jdiag)
-        return - loss_i - loss_j
+        return -loss_i - loss_j
+
 
 class MaxMarginRankingLoss(nn.Module):
 
@@ -123,6 +129,7 @@ class MaxMarginRankingLoss(nn.Module):
 
         return max_margin.mean()
 
+
 class AdaptiveMaxMarginRankingLoss(nn.Module):
 
     def __init__(self, margin=0.4, fix_norm=True):
@@ -149,7 +156,7 @@ class AdaptiveMaxMarginRankingLoss(nn.Module):
         x3 = x.transpose(0, 1).contiguous().view(-1, 1)
 
         x2 = torch.cat((x2, x3), 0)
-        max_margin = F.relu(  w1 * self.margin - (x1 - x2))
+        max_margin = F.relu(w1 * self.margin - (x1 - x2))
 
         if self.fix_norm:
             # remove the elements from the diagonal
@@ -162,9 +169,10 @@ class AdaptiveMaxMarginRankingLoss(nn.Module):
             x1_ = torch.index_select(x1, dim=0, index=keep_idx)
             w1_ = torch.index_select(w1, dim=0, index=keep_idx)
             x2_ = torch.index_select(x2, dim=0, index=keep_idx)
-            max_margin =  F.relu( w1_ * self.margin - (x1_ - x2_))
+            max_margin = F.relu(w1_ * self.margin - (x1_ - x2_))
 
         return max_margin.mean()
+
 
 class CrossEntropy(nn.Module):
     def __init__(self):
