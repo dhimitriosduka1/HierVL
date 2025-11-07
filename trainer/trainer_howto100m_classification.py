@@ -17,6 +17,7 @@ from base import BaseTrainer, Multi_BaseTrainer_dist
 from model.model import sim_matrix
 from utils import inf_loop
 
+
 class AllGather_multi(torch.autograd.Function):
     """An autograd function that performs allgather on a tensor."""
 
@@ -32,8 +33,10 @@ class AllGather_multi(torch.autograd.Function):
     def backward(ctx, grad_output):
         return (
             grad_output[ctx.batch_size * ctx.rank : ctx.batch_size * (ctx.rank + 1)],
-            None, None,
+            None,
+            None,
         )
+
 
 class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
     """
@@ -43,10 +46,34 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
         Inherited from BaseTrainer.
     """
 
-    def __init__(self, args, model, loss, metrics, optimizer, config, data_loader,
-                 valid_data_loader=None, lr_scheduler=None, len_epoch=None, writer=None,
-                 visualizer=None, tokenizer=None, max_samples_per_epoch=50000, start_epoch=1):
-        super().__init__(args, model, loss, metrics, optimizer, config, writer, start_epoch=start_epoch)
+    def __init__(
+        self,
+        args,
+        model,
+        loss,
+        metrics,
+        optimizer,
+        config,
+        data_loader,
+        valid_data_loader=None,
+        lr_scheduler=None,
+        len_epoch=None,
+        writer=None,
+        visualizer=None,
+        tokenizer=None,
+        max_samples_per_epoch=50000,
+        start_epoch=1,
+    ):
+        super().__init__(
+            args,
+            model,
+            loss,
+            metrics,
+            optimizer,
+            config,
+            writer,
+            start_epoch=start_epoch,
+        )
         self.config = config
         self.args = args
         self.data_loader = data_loader
@@ -75,9 +102,8 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
         # self.writer = writer
         # Freeze weights for whole network except the head
         for name, param in self.model.named_parameters():
-            if 'ht100m' not in name:
+            if "ht100m" not in name:
                 param.requires_grad = False
-
 
     def _eval_metrics(self, output):
         acc_metrics = np.zeros(len(self.metrics))
@@ -90,10 +116,10 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
     def _adjust_learning_rate(self, optimizer, epoch, args):
         lr = args.learning_rate1
         for milestone in args.schedule:
-            lr *= 0.1 if epoch >= milestone else 1.
-        print('[INFO] Learning rate for next epoch is: {}'.format(lr))
+            lr *= 0.1 if epoch >= milestone else 1.0
+        print("[INFO] Learning rate for next epoch is: {}".format(lr))
         for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+            param_group["lr"] = lr
 
     def _train_epoch(self, epoch):
         """
@@ -111,7 +137,12 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
 
             The metrics in log must have the key 'metrics'.
         """
-        print('Starting for epoch: {}, Trainable parameters: {}'.format(epoch, sum(p.numel() for p in self.model.parameters() if p.requires_grad)))
+        print(
+            "Starting for epoch: {}, Trainable parameters: {}".format(
+                epoch,
+                sum(p.numel() for p in self.model.parameters() if p.requires_grad),
+            )
+        )
 
         self.model.train()
         total_loss = [0] * len(self.data_loader)
@@ -122,19 +153,25 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
             if (batch_idx + 1) * self.total_batch_sum > self.max_samples_per_epoch:
                 break
             for dl_idx, data in enumerate(data_li):
-                data['video'] = data['video'].to(self.device)
-                data['label'] = data['label'].to(self.device)
+                data["video"] = data["video"].to(self.device)
+                data["label"] = data["label"].to(self.device)
                 # w_embeds = data['relation'].to(self.device)
 
                 self.optimizer.zero_grad()
                 with torch.set_grad_enabled(True):
-                    video_embeds = self.model.module.compute_video(data['video'])
-                    video_embeds = self.model.module.compute_video_aggregation(video_embeds, self.batch_size)
-                    
-                    video_predictions = self.model.module.head_ht100m_linear_probe(video_embeds)
-                    
-                    video_predictions = self.allgather(video_predictions.contiguous(), self.n_gpu, self.args)
-                    video_labels = self.allgather(data['label'], self.n_gpu, self.args)
+                    video_embeds = self.model.module.compute_video(data["video"])
+                    video_embeds = self.model.module.compute_video_aggregation(
+                        video_embeds, self.batch_size
+                    )
+
+                    video_predictions = self.model.module.head_ht100m_linear_probe(
+                        video_embeds
+                    )
+
+                    video_predictions = self.allgather(
+                        video_predictions.contiguous(), self.n_gpu, self.args
+                    )
+                    video_labels = self.allgather(data["label"], self.n_gpu, self.args)
                     # w_embeds = self.allgather(w_embeds, self.n_gpu, self.args)
 
                     loss = self.loss(video_predictions, video_labels)
@@ -145,45 +182,59 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
 
                 if self.writer is not None and self.args.rank == 0:
                     # self.writer.log_scalar(f'loss_train_{dl_idx}', loss.detach().item())
-                    total = int(self.data_loader[dl_idx].n_samples/self.n_gpu)
+                    total = int(self.data_loader[dl_idx].n_samples / self.n_gpu)
                     current = batch_idx * self.data_loader[dl_idx].batch_size
-                    final_total = (epoch-1) * total + current
-                    self.writer.add_scalar(f'Loss_training/loss_{dl_idx}', loss.detach().item(), final_total)
+                    final_total = (epoch - 1) * total + current
+                    self.writer.add_scalar(
+                        f"Loss_training/loss_{dl_idx}",
+                        loss.detach().item(),
+                        final_total,
+                    )
 
                 total_loss[dl_idx] += loss.detach().item()
 
                 # if batch_idx % self.log_step == 0 and self.args.local_rank == 0:
                 if batch_idx % self.log_step == 0 and self.args.rank == 0:
-                    self.logger.info('Train Epoch: {} dl{} {} Loss: {:.6f}'.format(
-                        epoch,
-                        dl_idx,
-                        self._progress(batch_idx, dl_idx),
-                        loss.detach().item()))
-                    print('Train Epoch: {} dl{} {} Loss: {:.6f}'.format(
-                        epoch,
-                        dl_idx,
-                        self._progress(batch_idx, dl_idx),
-                        loss.detach().item()), flush=True)
+                    self.logger.info(
+                        "Train Epoch: {} dl{} {} Loss: {:.6f}".format(
+                            epoch,
+                            dl_idx,
+                            self._progress(batch_idx, dl_idx),
+                            loss.detach().item(),
+                        )
+                    )
+                    print(
+                        "Train Epoch: {} dl{} {} Loss: {:.6f}".format(
+                            epoch,
+                            dl_idx,
+                            self._progress(batch_idx, dl_idx),
+                            loss.detach().item(),
+                        ),
+                        flush=True,
+                    )
 
                 self.optimizer.zero_grad()
             if batch_idx == self.len_epoch:
                 break
 
         log = {
-            f'loss_{dl_idx}': total_loss[dl_idx] / self.len_epoch for dl_idx in range(len(self.data_loader))
+            f"loss_{dl_idx}": total_loss[dl_idx] / self.len_epoch
+            for dl_idx in range(len(self.data_loader))
         }
 
         if self.writer is not None and self.args.rank == 0:
             for dl_idx in range(len(self.data_loader)):
                 tl = total_loss[dl_idx] / self.len_epoch
-                self.writer.add_scalar(f'Loss_training/loss_total_{dl_idx}', tl, epoch-1)
+                self.writer.add_scalar(
+                    f"Loss_training/loss_total_{dl_idx}", tl, epoch - 1
+                )
 
         if self.do_validation:
             val_log = self._valid_epoch(epoch)
             if self.args.rank == 0:
                 log.update(val_log)
 
-        #self._adjust_learning_rate(self.optimizer, epoch, self.args)
+        # self._adjust_learning_rate(self.optimizer, epoch, self.args)
 
         return log
 
@@ -207,9 +258,9 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
             # ... and dataloaders can be of different length
             for dl_idx, dl in enumerate(self.valid_data_loader):
                 for data in tqdm(dl, desc=f"Validating dl{dl_idx}"):
-                    meta_arr[dl_idx].append(data['meta'])
-                    data['video'] = data['video'].to(self.device)
-                    data['label'] = data['label'].to(self.device)
+                    meta_arr[dl_idx].append(data["meta"])
+                    data["video"] = data["video"].to(self.device)
+                    data["label"] = data["label"].to(self.device)
 
                     # Note that if the batch is not scattered among all the GPUs, `DataParallel` will fail because
                     # the model's mandatory argument `data` will not be passed to some of them.
@@ -217,28 +268,34 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
                     # It could be safely ignored during training but on validation/test we want accurate metrics.
                     # This avoids using `DataParallel` in this case, and supposes this batch fits in one GPU.
                     # TODO: Correct last batch issue: current_batch_size = data['video'].shape[0]
-                    current_batch_size = data['label'].shape[0]
+                    current_batch_size = data["label"].shape[0]
                     if current_batch_size != self.val_batch_size:
-                        print('Skipping last batch...')
+                        print("Skipping last batch...")
                         continue
-                    #if isinstance(self.model, nn.DataParallel) and current_batch_size < (dl.batch_size or 1):
+                    # if isinstance(self.model, nn.DataParallel) and current_batch_size < (dl.batch_size or 1):
                     #    scattered_len = len(self.model.scatter([torch.empty(current_batch_size)], {},
                     #                                           self.model.device_ids)[0])
                     #    avoid_data_parallel = scattered_len < len(self.model.device_ids)
-                    #else:
+                    # else:
                     #    avoid_data_parallel = False
 
-                    #if avoid_data_parallel:
+                    # if avoid_data_parallel:
                     #    vid_embed = self.model.module.compute_video(data['video'], return_embeds=True)
                     #    vid_embed = self.model.module.compute_video_aggregation(vid_embed, )
-                    #else:
+                    # else:
                     #    text_embed, vid_embed = self.model(data, return_embeds=True)
-                    vid_embed = self.model.module.compute_video(data['video'])
-                    vid_embed = self.model.module.compute_video_aggregation(vid_embed, self.val_batch_size)
-                    vid_predictions = self.model.module.head_ht100m_linear_probe(vid_embed)
+                    vid_embed = self.model.module.compute_video(data["video"])
+                    vid_embed = self.model.module.compute_video_aggregation(
+                        vid_embed, self.val_batch_size
+                    )
+                    vid_predictions = self.model.module.head_ht100m_linear_probe(
+                        vid_embed
+                    )
 
-                    vid_predictions = self.allgather(vid_predictions.contiguous(), self.n_gpu, self.args)
-                    video_labels = self.allgather(data['label'], self.n_gpu, self.args)
+                    vid_predictions = self.allgather(
+                        vid_predictions.contiguous(), self.n_gpu, self.args
+                    )
+                    video_labels = self.allgather(data["label"], self.n_gpu, self.args)
 
                     vid_pred_arr[dl_idx].append(vid_predictions.cpu())
                     vid_target_arr[dl_idx].append(video_labels.cpu())
@@ -247,7 +304,7 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
 
         for dl_idx in range(len(self.valid_data_loader)):
             # TODO: this needs a clean
-            #if self.writer is not None:
+            # if self.writer is not None:
             #    self.writer.log_scalar(f'loss_val_{dl_idx}',
             #                           total_val_loss[dl_idx] / len(self.valid_data_loader[dl_idx]))
             nested_metrics = {x: {} for x in range(len(self.valid_data_loader))}
@@ -261,16 +318,23 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
                 if self.args.rank == 0:
                     print(res)
                     print(type(res))
-                verbose(epoch=epoch, metrics=res, name=self.valid_data_loader[dl_idx].dataset_name)
+                verbose(
+                    epoch=epoch,
+                    metrics=res,
+                    name=self.valid_data_loader[dl_idx].dataset_name,
+                )
                 nested_metrics[dl_idx][metric_name] = res
 
                 if self.writer is not None and self.args.rank == 0:
-                    to_write = format_nested_metrics_for_writer(res, mode=metric_name,
-                                                                name=self.valid_data_loader[dl_idx].dataset_name)
-                    #for key, val in to_write.items():
+                    to_write = format_nested_metrics_for_writer(
+                        res,
+                        mode=metric_name,
+                        name=self.valid_data_loader[dl_idx].dataset_name,
+                    )
+                    # for key, val in to_write.items():
                     #    self.writer.log_scalar(key, val)
 
-                #if self.visualizer is not None and self.args.rank == 0:
+                # if self.visualizer is not None and self.args.rank == 0:
                 #    meta_arr_cat = {key: [] for key in meta_arr[0]}
                 #    for meta in meta_arr:
                 #        for key, val in meta.items():
@@ -280,15 +344,18 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
         res_dict = {}
 
         if self.args.rank == 0:
-            res_dict = {f'val_loss_{dl_idx}': total_val_loss[dl_idx] / len(self.valid_data_loader[dl_idx])
-                        for dl_idx in range(len(self.valid_data_loader))}
-            res_dict['nested_val_metrics'] = nested_metrics
+            res_dict = {
+                f"val_loss_{dl_idx}": total_val_loss[dl_idx]
+                / len(self.valid_data_loader[dl_idx])
+                for dl_idx in range(len(self.valid_data_loader))
+            }
+            res_dict["nested_val_metrics"] = nested_metrics
 
         return res_dict
 
     def _progress(self, batch_idx, dl_idx):
-        base = '[{}/{} ({:.0f}%)]'
-        if hasattr(self.data_loader[dl_idx], 'n_samples'):
+        base = "[{}/{} ({:.0f}%)]"
+        if hasattr(self.data_loader[dl_idx], "n_samples"):
             current = batch_idx * self.data_loader[dl_idx].batch_size
             total = int(self.data_loader[dl_idx].n_samples / self.n_gpu)
         else:
@@ -296,11 +363,13 @@ class Multi_Trainer_dist_HT100M_Classification(Multi_BaseTrainer_dist):
             total = self.len_epoch
         return base.format(current, total, 100.0 * current / total)
 
+
 def verbose(epoch, metrics, name="TEST"):
-    acc = metrics['accuracy']
+    acc = metrics["accuracy"]
     msg = f"{name:s} epoch {epoch}, Acc: {acc:.1f}"
     print(msg)
     return msg
+
 
 def format_nested_metrics_for_writer(metrics, mode, name="TEST"):
     res = {}
